@@ -1,3 +1,5 @@
+import xml.etree.ElementTree as et
+
 
 ###########################################################################
 #
@@ -6,18 +8,18 @@
 ###########################################################################
 
 
-# will return a list of nodes specified by an attribute key and an attribute value
-def get_nodes(xml_file, node_tag, node_att_name=None, node_att_val=None):
+# will search in all of the direct children of the root
+def get_root_direct_child_nodes(xml_file, node_tag, node_att_name=None, node_att_val=None):
     root = xml_file.getroot()
     if root.tag == node_tag:
         return [root]
+    return _get_nodes(root, node_tag, node_att_name, node_att_val)
+
+
+# will return a list of nodes specified by an attribute key and an attribute value from a parent node
+def get_child_nodes(node_parent, node_tag, node_att_name=None, node_att_val=None):
     selector = node_tag
-    if node_att_name is not None:
-        if node_att_val is not None:
-            selector = node_tag + "/[@" + node_att_name + "='" + node_att_val + "']"
-        else:
-            selector = node_tag + "/[@" + node_att_name + "]"
-    return root.findall(selector)
+    return _get_nodes(node_parent, node_tag, node_att_name, node_att_val)
 
 
 # will return a list of nodes which doesn't have a specific attribute
@@ -54,18 +56,28 @@ def nodes_to_dict(nodes, att_key):
         nodes_dict[get_node_att(node, att_key)] = get_text_from_node(node)
     return nodes_dict
 
+
 # will return all of the direct children of a given node
 def get_all_direct_child_nodes(node):
     return list(node)
 
+
 # will return the text (inner html) of a given node
 def get_text_from_node(node):
+    text = node.text
+    if text == '\n        ':
+        return None
     return node.text
 
 
-# will return the text from a specific node
-def get_text(xml_file, node_tag, node_att_name=None, node_att_val=None):
-    return get_text_from_node(get_nodes(xml_file, node_tag, node_att_name, node_att_val)[0])
+# will return the text from a child node, using the parent node.
+# NOTICE: this function will not crash but return None if the node isn't exists
+def get_text_from_child_node(parent_node, child_node_tag, child_node_att_name=None, child_node_att_val=None):
+    child_nodes = get_child_nodes(parent_node, child_node_tag, child_node_att_name, child_node_att_val)
+    if child_nodes:
+        return get_text_from_node(child_nodes[0])
+    else:
+        return None
 
 
 # will set the text (inner html) in a given node
@@ -80,7 +92,6 @@ def get_node_att(node, att_name):
 
 # will return an xml file
 def read_xml_file(xml_path):
-    import xml.etree.ElementTree as et
     return et.parse(xml_path)
 
 
@@ -94,28 +105,42 @@ def save_xml_file(xml_file, xml_path, add_utf_8_encoding=False):
 
 # will create an xml file
 def create_xml_file(root_node_tag, output_file):
-    import xml.etree.ElementTree as et
     xml = et.Element(root_node_tag)
     tree = et.ElementTree(xml)
     save_xml_file(tree, output_file)
     return tree
 
 
-def add_node(doc, node_tag, att_dict={}, node_text=None, parent_node=None):
+def create_and_add_new_node(parent_node, node_tag, att_dict=None, node_text=None):
     """
     Will add a node to a certain (relative) location
+
     Args:
         param xml: the xml file
         param parent_node: the parent of the node to add (for root, leave blank)
         param node_tag: the tag of the node ('String', for example)
     """
-    if parent_node is None:
-        parent_node = doc.getroot()
-    import xml.etree.ElementTree as et
+    if att_dict is None:
+        att_dict = {}
     node = et.SubElement(parent_node, node_tag, att_dict)
     if node_text is not None:
         set_node_text(node, node_text)
     return node
+
+
+# will add an existing node to a parent node
+def add_node(parent_node, child_node):
+    direct_children = get_all_direct_child_nodes(parent_node)
+    location = 0
+    if direct_children:
+        location = len(direct_children)
+    parent_node.insert(location, child_node)
+
+
+# will add a bunch of already existing nodes to a parent node
+def add_nodes(parent_node, child_nodes):
+    for child_node in child_nodes:
+        add_node(parent_node, child_node)
 
 
 # will add attribute to a given node
@@ -124,12 +149,35 @@ def set_node_atts(node, atts_dict):
         node.set(key, val)
 
 
+# will merge xml1 with xml2 and return a new xml comprising both of them.
+# NOTICE: this function will compare the direct root child nodes and merge/append them.
+def merge_xml1_with_xml2(xml1, xml2):
+    xml2_root = get_root_node(xml2)
+    xml2_direct_children = get_all_direct_child_nodes(xml2_root)
+    for xml1_child in get_all_direct_child_nodes(get_root_node(xml1)):
+        parent_node = None
+        for xml2_child in xml2_direct_children:
+            # if the direct child already exists, add the appended tag content to the existing one
+            if xml1_child.tag == xml2_child.tag:
+                parent_node = xml2_child
+                break
+
+        if parent_node:
+            xml1_direct_children = get_all_direct_child_nodes(xml1_child)
+            add_nodes(parent_node, xml1_direct_children)
+
+        else:
+            add_node(xml2_root, xml1_child)
+
+    return xml2
+
+
 # Will turn a simple dictionary to an xml file, by hierarchical order
 def simple_dict_to_xml(xml_dict, root_name, output_path):
     # will unpack the parent recursively
     def recursive_unpack_parent(parent_dict, parent=None):
         for key, val in parent_dict.items():
-            parent = add_node(xml, key, parent_node=parent)
+            parent = add_new_node(xml, key, parent_node=parent)
             if type(val) is dict:
                 recursive_unpack_parent(val, parent)
 
@@ -140,3 +188,14 @@ def simple_dict_to_xml(xml_dict, root_name, output_path):
 
 def get_root_node(xml_file):
     return xml_file.getroot()
+
+
+# bp code for nodes fetching
+def _get_nodes(node, node_tag, node_att_name=None, node_att_val=None):
+    selector = node_tag
+    if node_att_name is not None:
+        if node_att_val is not None:
+            selector = node_tag + "/[@" + node_att_name + "='" + node_att_val + "']"
+        else:
+            selector = node_tag + "/[@" + node_att_name + "]"
+    return node.findall(selector)

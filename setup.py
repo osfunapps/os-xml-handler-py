@@ -3,7 +3,7 @@ from distutils.core import setup
 setup(
     name='os_xml_handler',  # How you named your package folder (MyLib)
     packages=['os_xml_handler'],  # Choose the same as "name"
-    version='1.00',  # Start with a small number and increase it with every change you make
+    version='1.06',  # Start with a small number and increase it with every change you make
     license='MIT',  # Chose a license from here: https://help.github.com/articles/licensing-a-repository
     description='py xml tools for os',  # Give a short description about your library
     author='Oz Shabat',  # Type in your name
