@@ -1,36 +1,48 @@
-import xml.etree.ElementTree as et
+from lxml import etree
 
 
-###########################################################################
-#
-# this module meant to provide intuitive functions to work with xml files
-#
-###########################################################################
-
-
-# will search in all of the direct children of the root
-def get_root_direct_child_nodes(xml_file, node_tag, node_att_name=None, node_att_val=None):
-    root = xml_file.getroot()
-    if root.tag == node_tag:
-        return [root]
-    return _get_nodes(root, node_tag, node_att_name, node_att_val)
+#########################################################################
+# this module aim to provide intuitive functions to work with xml files #
+#########################################################################
 
 
 # will return a list of nodes specified by an attribute key and an attribute value from a parent node
-def get_child_nodes(node_parent, node_tag, node_att_name=None, node_att_val=None):
+def get_child_nodes(node_parent, node_tag, node_att_name=None, node_att_val=None, namespace_map=None, filter_comment_nodes=True):
     selector = node_tag
-    return _get_nodes(node_parent, node_tag, node_att_name, node_att_val)
+    return find_all_nodes(node_parent, node_tag, node_att_name, node_att_val, recursive=False, namespace_map=namespace_map, filter_comment_nodes=filter_comment_nodes)
+
+
+# will search in all of the direct children of the root
+def get_root_direct_child_nodes(xml_file, node_tag, node_att_name=None, node_att_val=None, namespace_map=None, filter_comment_nodes=True):
+    return get_child_nodes(get_root_node(xml_file), node_tag, node_att_name, node_att_val, namespace_map, filter_comment_nodes)
 
 
 # will return a list of nodes which doesn't have a specific attribute
-def get_nodes_from_xml_without_att(xml_file, node_tag, node_att_name=None):
+def get_nodes_from_xml_without_att(xml_file, node_tag, node_att_name=None, namespace_map=None, filter_comment_nodes=True):
     root = xml_file.getroot()
     relevant_nodes = []
+    node_att_name = _sanitize_att_name(node_att_name, namespace_map)
     nodes = root.findall(node_tag)
     for node in nodes:
         if get_node_att(node, node_att_name) is None:
             relevant_nodes.append(node)
+    if filter_comment_nodes:
+        relevant_nodes = filter_comments(relevant_nodes)
     return relevant_nodes
+
+
+# will remove any comment nodes from a node list
+def filter_comments(node_list):
+    res = []
+    for node in node_list:
+        if not is_comment_node(node):
+            res.append(node)
+    return res
+
+
+# will check if a node is a comment node
+def is_comment_node(node):
+    return type(node) is etree._Comment
 
 
 def nodes_to_dict(nodes, att_key):
@@ -58,8 +70,11 @@ def nodes_to_dict(nodes, att_key):
 
 
 # will return all of the direct children of a given node
-def get_all_direct_child_nodes(node):
-    return list(node)
+def get_all_direct_child_nodes(node, filter_comment_nodes=True):
+    nodes = list(node)
+    if filter_comment_nodes:
+        return filter_comments(nodes)
+    return nodes
 
 
 # will return the text (inner html) of a given node
@@ -86,13 +101,21 @@ def set_node_text(node, text):
 
 
 # will return the value of a given att from a desired node
-def get_node_att(node, att_name):
+def get_node_att(node, att_name, namespace_map=None):
+    att_name = _sanitize_att_name(att_name, namespace_map)
     return node.get(att_name)
 
 
-# will return an xml file
-def read_xml_file(xml_path):
-    return et.parse(xml_path)
+# will read and return an xml file.
+# added a custom parser to prevent the commends from being removed
+def read_xml_file(xml_path, namespace_dict=None, remove_comments=False):
+    parser = etree.XMLParser(remove_comments=remove_comments)
+    tree = etree.parse(xml_path, parser=parser)
+    etree.set_default_parser(parser)
+    if namespace_dict:
+        for prefix, uri in namespace_dict.items():
+            etree.register_namespace(prefix, uri)
+    return tree
 
 
 # will save the changes made in an xml file
@@ -105,24 +128,31 @@ def save_xml_file(xml_file, xml_path, add_utf_8_encoding=False):
 
 # will create an xml file
 def create_xml_file(root_node_tag, output_file):
-    xml = et.Element(root_node_tag)
-    tree = et.ElementTree(xml)
+    xml = etree.Element(root_node_tag)
+    tree = etree.ElementTree(xml)
+
+    # create dir if not exists
+    from os_file_handler import file_handler
+    parent_dir = file_handler.get_parent_path(output_file)
+    if not file_handler.is_dir_exists(parent_dir):
+        file_handler.create_dir(parent_dir)
+
     save_xml_file(tree, output_file)
+    # tree = read_xml_file(output_file)   # maybe to read the xml again, to prevent the comments from being removed?
     return tree
 
 
-def create_and_add_new_node(parent_node, node_tag, att_dict=None, node_text=None):
-    """
-    Will add a node to a certain (relative) location
+# will add a node to a relative location
+def create_and_add_new_node(parent_node, node_tag, att_val_dict=None, node_text=None, namespace_map=None):
+    if att_val_dict is None:
+        att_val_dict = {}
+    if att_val_dict is not None and namespace_map is not None:
+        node_att_val_dict = {}
+        for key, val in att_val_dict.items():
+            node_att_val_dict[_sanitize_att_name(key, namespace_map)] = val
+        att_val_dict = node_att_val_dict
 
-    Args:
-        param xml: the xml file
-        param parent_node: the parent of the node to add (for root, leave blank)
-        param node_tag: the tag of the node ('String', for example)
-    """
-    if att_dict is None:
-        att_dict = {}
-    node = et.SubElement(parent_node, node_tag, att_dict)
+    node = etree.SubElement(parent_node, node_tag, att_val_dict)
     if node_text is not None:
         set_node_text(node, node_text)
     return node
@@ -143,41 +173,38 @@ def add_nodes(parent_node, child_nodes):
         add_node(parent_node, child_node)
 
 
-# will add attribute to a given node
-def set_node_atts(node, atts_dict):
-    for key, val in atts_dict.items():
-        node.set(key, val)
-
-
 # will merge xml1 with xml2 and return a new xml comprising both of them.
 # NOTICE: this function will compare the direct root child nodes and merge/append them.
 def merge_xml1_with_xml2(xml1, xml2):
-    xml2_root = get_root_node(xml2)
-    xml2_direct_children = get_all_direct_child_nodes(xml2_root)
-    for xml1_child in get_all_direct_child_nodes(get_root_node(xml1)):
+    xml1_root = get_root_node(xml1)
+    xml1_direct_children = get_all_direct_child_nodes(xml1_root)
+    for xml2_child in get_all_direct_child_nodes(get_root_node(xml2)):
         parent_node = None
-        for xml2_child in xml2_direct_children:
+        for xml1_child in xml1_direct_children:
             # if the direct child already exists, add the appended tag content to the existing one
-            if xml1_child.tag == xml2_child.tag:
-                parent_node = xml2_child
+            if xml2_child.tag == xml1_child.tag:
+                parent_node = xml1_child
                 break
 
-        if parent_node:
-            xml1_direct_children = get_all_direct_child_nodes(xml1_child)
-            add_nodes(parent_node, xml1_direct_children)
-
+        if parent_node is not None:
+            xml2_direct_children = get_all_direct_child_nodes(xml2_child)
+            if len(xml2_direct_children) > 0:
+                add_nodes(parent_node, xml2_direct_children)
+            else:
+                # if reached here, it means that only the text is resembled
+                set_node_text(parent_node, f'{get_text_from_node(parent_node)}\n{get_text_from_node(xml2_child)}')
         else:
-            add_node(xml2_root, xml1_child)
+            add_node(xml1_root, xml2_child)
 
-    return xml2
+    return xml1
 
 
 # Will turn a simple dictionary to an xml file, by hierarchical order
-def simple_dict_to_xml(xml_dict, root_name, output_path):
+def simple_dict_to_xml(xml_dict, root_name, output_path, namespace_map=None):
     # will unpack the parent recursively
     def recursive_unpack_parent(parent_dict, parent=None):
         for key, val in parent_dict.items():
-            parent = add_new_node(xml, key, parent_node=parent)
+            parent = create_and_add_new_node(parent, xml, key, namespace_map=namespace_map)
             if type(val) is dict:
                 recursive_unpack_parent(val, parent)
 
@@ -190,12 +217,37 @@ def get_root_node(xml_file):
     return xml_file.getroot()
 
 
-# bp code for nodes fetching
-def _get_nodes(node, node_tag, node_att_name=None, node_att_val=None):
+# will add attribute to a given node.
+# If adding a namespace map, add, for example {'android', 'http://schemas.android.com/apk/res/android'}. The keys should be normal. Like: {"android:value": xxxx}
+def set_node_atts(node, atts_dict, namespace_map=None):
+    for key, val in atts_dict.items():
+        key = _sanitize_att_name(key, namespace_map)
+        node.set(key, val)
+
+
+# will search for a node
+def find_all_nodes(parent_node, node_tag, node_att_name=None, node_att_val=None, recursive=True, namespace_map=None, filter_comment_nodes=True):
     selector = node_tag
     if node_att_name is not None:
+        node_att_name = _sanitize_att_name(node_att_name, namespace_map)
         if node_att_val is not None:
             selector = node_tag + "/[@" + node_att_name + "='" + node_att_val + "']"
         else:
             selector = node_tag + "/[@" + node_att_name + "]"
-    return node.findall(selector)
+    if recursive:
+        nodes = parent_node.findall(f'.//{selector}')
+    else:
+        nodes = parent_node.findall(selector, namespace_map)
+    if filter_comment_nodes:
+        return filter_comments(nodes)
+    return nodes
+
+
+# will parse the namespace, as required, in the att_name
+def _sanitize_att_name(att_name, namespace_map):
+    if namespace_map is not None:
+        for prefix, uri in namespace_map.items():
+            if prefix in att_name:
+                att_name = '{' + str(att_name).replace(':', '}').replace(prefix, uri)
+                break
+    return att_name
